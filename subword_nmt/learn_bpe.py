@@ -69,6 +69,7 @@ def create_parser(subparsers=None):
 
     return parser
 
+
 def get_vocabulary(fobj, is_dict=False, num_workers=1):
     """Read text and return dictionary that encodes vocabulary
     """
@@ -84,68 +85,14 @@ def get_vocabulary(fobj, is_dict=False, num_workers=1):
     elif num_workers == 1 or fobj.name == '<stdin>':
         if num_workers > 1:
             warnings.warn("In parallel mode, the input cannot be STDIN. Using 1 processor instead.")
-        for i, line in enumerate(fobj):
-            for word in line.strip('\r\n ').split(' '):
-                if word:
-                    vocab[word] += 1
-    elif num_workers > 1:
-
-        if sys.version_info < (3, 0):
-            print("Parallel mode is only supported in Python3.")
-            sys.exit(1)
-
-        with open(fobj.name, encoding="utf8") as f:
-            size = os.fstat(f.fileno()).st_size
-            chunk_size = int(size / num_workers)
-            offsets = [0 for _ in range(num_workers + 1)]
-            for i in range(1, num_workers):
-                f.seek(chunk_size * i)
-                pos = f.tell()
-                while True:
-                    try:
-                        line = f.readline()
-                        break
-                    except UnicodeDecodeError:
-                        pos -= 1
-                        f.seek(pos)
-                offsets[i] = f.tell()
-                assert 0 <= offsets[i] < 1e20, "Bad new line separator, e.g. '\\r'"
-
-        vocab_files = []
-        pool = Pool(processes=num_workers)
-        for i in range(num_workers):
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            tmp.close()
-            vocab_files.append(tmp)
-            pool.apply_async(_get_vocabulary, (fobj.name, tmp.name, offsets[i], offsets[i + 1]))
-        pool.close()
-        pool.join()
-        import pickle
-        for i in range(num_workers):
-            with open(vocab_files[i].name, 'rb') as f:
-                vocab += pickle.load(f)
-            os.remove(vocab_files[i].name)
+        import regex as re
+        pat = re.compile(r"""Ġ?[a-zA-Z]+|Ġ?\p{N}+|Ġ?[^ĠĊ\p{L}\p{N}]+|[ĠĊ]+(?![^ĠĊ])|[ĠĊ]+""")
+        for word in pat.findall(fobj.read()):
+            vocab[word] += 1
     else:
         raise ValueError('`num_workers` is expected to be a positive number, but got {}.'.format(num_workers))
     return vocab
 
-def _get_vocabulary(infile, outfile, begin, end):
-    import pickle
-    vocab = Counter()
-    with open(infile, encoding="utf8") as f:
-        f.seek(begin)
-        line = f.readline()
-        while line:
-            pos = f.tell()
-            assert 0 <= pos < 1e20, "Bad new line separator, e.g. '\\r'"
-            if end > 0 and pos > end:
-                break
-            for word in line.strip('\r\n ').split(' '):
-                if word:
-                    vocab[word] += 1
-            line = f.readline()
-    with open(outfile, 'wb') as f:
-        pickle.dump(vocab, f)
 
 def update_pair_statistics(pair, changed, stats, indices):
     """Minimally update the indices and frequency of symbol pairs
@@ -274,7 +221,7 @@ def learn_bpe(infile, outfile, num_symbols, min_frequency=2, verbose=False, is_d
     outfile.write('#version: 0.2\n')
 
     vocab = get_vocabulary(infile, is_dict, num_workers)
-    vocab = dict([(tuple(x[:-1])+(x[-1]+'</w>',) ,y) for (x,y) in vocab.items()])
+    vocab = dict([(tuple(x[:-1])+(x[-1],) ,y) for (x,y) in vocab.items()])
     sorted_vocab = sorted(vocab.items(), key=lambda x: x[1], reverse=True)
 
     stats, indices = get_pair_statistics(sorted_vocab)
